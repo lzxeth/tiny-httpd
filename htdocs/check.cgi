@@ -19,8 +19,4 @@ foreach my $param ($cgi->param)
 }
 print "</UL>";
 
-#获取环境变量
-#print Dumper(/%ENV);
-print "path is $ENV{path}\n"; 
-
 print $cgi->end_html, "\n";

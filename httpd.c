@@ -46,7 +46,7 @@ void not_found(int);
 void serve_file(int, const char *);
 int startup(u_short *);
 void unimplemented(int);
-void readBufferBeforeSend(int, const char *);
+void readBufferBeforeSend(int);
 
 /**********************************************************************/
 /* A request has caused a call to accept() on the server port to
@@ -55,23 +55,24 @@ void readBufferBeforeSend(int, const char *);
 /**********************************************************************/
 void accept_request(int connfd)
 {
-    char buf[1024];
-    int numchars;
-    char method[255];
-    char url[255];
-    char path[512];
+    char buf[1024]; //缓冲从socket中读取的字节
+    int numchars; //读取字节数
+    char method[255]; //请求方法
+    char url[255]; //请求的url，包括参数
+    char path[512]; //文件路径,不包括参数
     size_t i, j;
     struct stat st;
     int cgi = 0;      /* 如果确定是cgi请求需要把这个变量置为1 */
-    char *query_string = NULL;
+    char *query_string = NULL; //参数
 
-    //读http 请求的第一行数据(GET /index.html HTTP/1.1)，把请求方法存进 method 中
+    //从socket中读取一行数据
+    //这里就是读取请求行(GET /index.html HTTP/1.1)，行数据放到buf中，长度返回给numchars
     numchars = get_line(connfd, buf, sizeof(buf));
 
     i = 0; j = 0; //这里使用两个变量i,j因为后边i被重置为0了。j用来保持请求行的seek
     while (!ISspace(buf[j]) && (i < sizeof(method) - 1)) //小于method-1是因为最后一位要放\0
     {
-        method[i] = buf[j];
+        method[i] = buf[j]; //获取请求方法放入method
         i++; j++;
     }
     method[i] = '\0';
@@ -81,11 +82,11 @@ void accept_request(int connfd)
     if (strcasecmp(method, "GET") && strcasecmp(method, "POST"))
     {
         //清除缓冲区消息头和消息体
-        readBufferBeforeSend(connfd, method);
+        readBufferBeforeSend(connfd);
 
         unimplemented(connfd);
 
-        close(connfd); //TODO 在调用没有实现的方法后没有关闭链接,这里要把connfd关闭，使用其他方法有问题啊
+        close(connfd); //TODO 在调用没有实现的方法后没有关闭链接,这里要把connfd关闭
 
         return;
     }
@@ -96,7 +97,8 @@ void accept_request(int connfd)
     }
 
     i = 0;
-    //跳过所有的空白字符，此时buf里装的是请求行的内容(GET /index.html HTTP/1.1),而j的指针是读完GET之后的位置，
+    //跳过所有的空白字符
+    //此时buf里装的是请求行的内容(GET /index.html HTTP/1.1),而j的指针是读完GET之后的位置
     //所以跳过空格后获取的就是请求url了
     while (ISspace(buf[j]) && (j < sizeof(buf)))
         j++;
@@ -112,6 +114,7 @@ void accept_request(int connfd)
     //如果这个请求是一个 GET 方法的话
     //TODO 对于不是GET方法的请求其实也是需要解析query_string的，
     //TODO 否则对于POST:http://10.33.106.82:8008/check.cgi?name=foo 带参数的情况path解析是失败的。
+    //TODO 但这里只是简单的区分GET和POST请求,这个就不考虑了吧
     if (strcasecmp(method, "GET") == 0)
     {
         //用一个指针指向 url
@@ -148,13 +151,12 @@ void accept_request(int connfd)
     //stat()用来将参数file_name 所指的文件状态, 复制到参数buf 所指的结构中。执行成功则返回0，失败返回-1，错误代码存于errno。
     if (stat(path, &st) == -1) {
         //如果不存在，那把这次 http 的请求后续的内容(head 和 body)全部读完并忽略
-        readBufferBeforeSend(connfd, method);
+        readBufferBeforeSend(connfd);
 
         //返回方法不存在
         not_found(connfd);
     } else {
         //文件存在，那去跟常量S_IFMT相与，相与之后的值可以用来判断该文件是什么类型的
-        //S_IFMT参读《TLPI》P281，与下面的三个常量一样是包含在<sys/stat.h>
         if ((st.st_mode & S_IFMT) == S_IFDIR)
             //如果这个文件是个目录，那就需要再在 path 后面拼接一个"/index.html"的字符串
             //注意此时访问需要http://10.33.106.82:8008/static/，后边不带/不能识别为目录
@@ -169,10 +171,10 @@ void accept_request(int connfd)
         }
 
         if (!cgi) {
-            //如果不需要 cgi 机制的话，
+            //静态解析
             serve_file(connfd, path);
         } else {
-            //如果需要则调用
+            //CGI解析
             execute_cgi(connfd, path, method, query_string);
         }
     }
@@ -245,7 +247,8 @@ void cannot_execute(int connfd)
 /**********************************************************************/
 void error_die(const char *sc)
 {
-//包含于<stdio.h>,基于当前的 errno 值，在标准错误上产生一条错误消息。参考《TLPI》P49
+    // #include <stdio.h>,void perror(char *string);
+    // 在输出错误信息前加上字符串sc:
     perror(sc);
     exit(1);
 }
@@ -268,7 +271,6 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
     int numchars = 1;
     int content_length = -1;
 
-    //往 buf 中填东西以保证能进入下面的 while
     buf[0] = 'A'; buf[1] = '\0';
 
     //如果是 http 请求是 GET 方法的话读取并忽略请求剩下的内容
@@ -293,14 +295,14 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
             bad_request(connfd);
             return;
         }
-
-        printf("content_length:%d\n", content_length);
     }
 
     sprintf(buf, "HTTP/1.0 200 OK\r\n");
     send(connfd, buf, strlen(buf), 0);
 
     //下面这里创建两个管道，用于两个进程间通信
+    //管道是一种进程间通信的方法，但是管道是半双工的，就是流只能向一个方向流动，
+    //所以如果想把一个进程的输入和输出都重定向的话，则需要建立两条管道，并且需要关闭不需要的管道的读端或者写端
     if (pipe(cgi_output) < 0) {
         cannot_execute(connfd);
         return;
@@ -324,7 +326,6 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
         char query_env[255];
         char length_env[255];
 
-        //dup2()包含<unistd.h>中，参读《TLPI》P97
         //将子进程的输出由标准输出重定向到 cgi_ouput 的管道写端上
         dup2(cgi_output[1], 1);
         //将子进程的输入由标准输入重定向到 cgi_input 的管道读端上
@@ -335,7 +336,7 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
 
         //构造一个环境变量
         sprintf(meth_env, "REQUEST_METHOD=%s", method);
-        //putenv()包含于<stdlib.h>中，参读《TLPI》P128
+
         //将这个环境变量加进子进程的运行环境中
         putenv(meth_env);
 
@@ -349,10 +350,7 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
             putenv(length_env);
         }
 
-        //execl()包含于<unistd.h>中，参读《TLPI》P567
-        //最后将子进程替换成另一个进程并执行 cgi 脚本
-        // execl(path, path, NULL);
-        system("php-cgi /data0/www/tinyhttpd-master/htdocs/index.php");
+        execl(path, path, NULL);
         exit(0);
 
     } else {    /* parent */
@@ -367,15 +365,6 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
                 recv(connfd, &c, 1, 0);
                 write(cgi_input[1], &c, 1);
             }
-
-            /*
-            不能这样搞，只能用content_length读取正好的字节，多了少了都不行。
-            while(recv(connfd, &c, 1, 0)){
-                 write(cgi_input[1], &c, 1);
-                 i++;
-             }
-             printf("i:%d\n", i);
-             */
         }
 
         //然后从 cgi_output 管道中读子进程的输出，并发送到客户端去
@@ -410,19 +399,19 @@ void execute_cgi(int connfd, const char *path, const char *method, const char *q
 int get_line(int sock, char *buf, int size)
 {
     int i = 0;
-    char c = '\0';
+    char c = '\0'; //补充到结尾的字符
     int n;
 
     while ((i < size - 1) && (c != '\n')) //因为字符串的最后一位要使用'\0'结束，所以size需要 -1
     {
         //从sock中一次读一个字符，循环读
         //int recv(int s, void *buf, int len, unsigned int flags);
-        //recv()用来接收远端主机经指定的socket 传来的数据, 并把数据存到由参数buf 指向的内存空间, 参数len 为可接收数据的最大长度.
+        //recv()用来接收远端主机经指定的socket传来的数据, 并把数据存到由参数buf指向的内存空间, 参数len为可接收数据的最大长度.
         n = recv(sock, &c, 1, 0);
         if (n > 0) {
-            if (c == '\r') { //这个if里边处理了\r和\r\n结尾的情况,如果是\n结尾就更简单了
+            if (c == '\r') { //这个if里边处理了\r和\r\n结尾的情况,把c统一改为\n,如果是\n结尾那无需处理直接就赋值给buf啦
 
-                //参数 flags 一般设0.MSG_PEEK表示返回来的数据并不会在系统内删除, 如果再调用recv()会返回相同的数据内容.
+                //参数 flags 一般设0，MSG_PEEK表示返回来的数据并不会在系统内删除, 如果再调用recv()会返回相同的数据内容.
                 //这个选项用于测试下一个字符是不是\n，并不会把当前读出的字符从缓冲区中删掉
                 n = recv(sock, &c, 1, MSG_PEEK);
                 /* DEBUG printf("%02X\n", c); */
@@ -434,47 +423,50 @@ int get_line(int sock, char *buf, int size)
 
             buf[i] = c;
             i++;
-            //这里处理了读完缓冲区仍旧没找到换行符的情况(只能是缓冲区小于size时才成立)，如果缓冲区大于size-1循环里并没有给补充\n，只在跳出循环后补充了\0
-            //查得：socket发送数据时候先把数据发送到socket缓冲区中，之后接受函数再从缓冲区中取数据，socket默认的是1024×8=8192字节
-            //那为什么没有考虑这种情况呢？难道http协议的一行不会超过1024bytes么？
         } else {
+            //读取失败直接赋值\n
             c = '\n';
         }
     }
+
+    //读取完一行数据后在获得的字符串末尾补上\0
     buf[i] = '\0';
 
     return (i);
 }
 
-void readBufferBeforeSend(int connfd, const char *method)
+/**
+ * 处理请求方法不是GET和POST的情况
+ * @param connfd [description]
+ */
+void readBufferBeforeSend(int connfd)
 {
-    int numchars;
+    int numchars = 1;
     char buf[1024];
 
     int content_length = -1;    //post要读取的长度
     int i;  //for循环准备
     char c; //for循环读取消息体准备
 
-    //对于GET和HEAD方法,只有请求头部分,不会发送请求体
-    if (!strcasecmp(method, "HEAD"))
-    {
-        while ((numchars > 0) && strcmp("\n", buf))  //\r\n的一行返回的字符串就是"\n",读完这一行循环就停止了。
-            numchars = get_line(connfd, buf, sizeof(buf));
-    } else {
-        //除了GET和HEAD其他方法都会发送请求体,这里需要把头和体都读出来。
-        numchars = get_line(connfd, buf, sizeof(buf));
-        //这个循环的目的是读出指示body长度大小的参数，并记录 body 的长度大小。并且读取全部消息头,忽略。
-        //stccmp若参数s1 和s2 字符串相同则返回0。s1 若大于s2 则返回大于0 的值。s1 若小于s2 则返回小于0 的值。
-        while ((numchars > 0) && strcmp("\n", buf)) //完全等于"\n"代表当前行是消息头和消息体之前的那个空行
-        {
-            buf[15] = '\0';
-            if (strcasecmp(buf, "Content-Length:") == 0) {
-                content_length = atoi(&(buf[16])); //记录 body 的长度大小
-            }
-            numchars = get_line(connfd, buf, sizeof(buf));
-        }
+    buf[0] = 'A'; buf[1] = '\0';
 
-        //读出消息体并忽略,这里不能多读也不能少读
+    //对于GET和HEAD方法,只有请求头部分,不会发送请求体
+    //注意HEAD方法只会返回请求头,不返回请求体,页面上看不到输出是正常的,只要返回状态码正确就行了。
+    //除了GET和HEAD其他方法都会发送请求体,这里先读出请求头,根据Content-Length判断是否有请求体
+
+    //strcmp若参数s1 和s2 字符串相同则返回0。s1 若大于s2 则返回大于0 的值。s1 若小于s2 则返回小于0 的值。
+    //完全等于"\n"代表当前行是消息头和消息体之前的那个空行
+    while ((numchars > 0) && strcmp("\n", buf)) 
+    {
+        buf[15] = '\0';
+        if (strcasecmp(buf, "Content-Length:") == 0) {
+            content_length = atoi(&(buf[16])); //把ascii码转为整形,http协议传输的是ascii码
+        }
+        numchars = get_line(connfd, buf, sizeof(buf));
+    }
+
+    //读出消息体并忽略,这里不能多读也不能少读
+    if(content_length != -1){
         for (i = 0; i < content_length; i++) {
             recv(connfd, &c, 1, 0);
         }
@@ -541,9 +533,9 @@ void serve_file(int connfd, const char *filename)
     int numchars = 1;
     char buf[1024];
 
-    //确保 buf 里面有东西，能进入下面的 while 循环
     buf[0] = 'A'; buf[1] = '\0';
-    //循环作用是读取并忽略掉这个 http 请求后面的所有内容
+    
+    //循环读出请求头内容并忽略,这里也可以调用我添加的函数readBufferBeforeSend完成.
     while ((numchars > 0) && strcmp("\n", buf))  /* read & discard headers */
         numchars = get_line(connfd, buf, sizeof(buf));
 
@@ -562,22 +554,18 @@ void serve_file(int connfd, const char *filename)
 }
 
 /**********************************************************************/
-/* This function starts the process of listening for web connections
- * on a specified port.  If the port is 0, then dynamically allocate a
- * port and modify the original port variable to reflect the actual
- * port.
+/* 这个函数在指定的端口上启动一个监听进程，如果端口是0，就动态分配一个
+ * 并把值赋给变量port
+ *
  * Parameters: pointer to variable containing the port to connect on
  * Returns: the socket */
 /**********************************************************************/
 int startup(u_short *port)
 {
     int httpd = 0;
-
-    //sockaddr_in 是 IPV4的套接字地址结构。定义在<netinet/in.h>,参读《TLPI》P1202
     struct sockaddr_in name;
 
-    //socket()用于创建一个用于 socket 的描述符，函数包含于<sys/socket.h>。参读《TLPI》P1153
-    //这里的PF_INET其实是与 AF_INET同义，具体可以参读《TLPI》P946
+    //建立TCP SOCKET,PF_INET等同于AF_INET
     httpd = socket(PF_INET, SOCK_STREAM, 0);
     if (httpd == -1)
         error_die("socket");
@@ -585,38 +573,32 @@ int startup(u_short *port)
     //在修改源码后重启启动总是提示bind: Address already in use,使用tcpreuse解决
     int reuse = 1;
     if (setsockopt(httpd, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse)) < 0) {
-        error_die("setsockopet error");
+        error_die("setsockopet");
     }
 
     memset(&name, 0, sizeof(name));
     name.sin_family = AF_INET;
 
-    //htons()，ntohs() 和 htonl()包含于<arpa/inet.h>, 参读《TLPI》P1199
-    //将*port 转换成以网络字节序表示的16位整数
+    //<arpa/inet.h>，将*port 转换成以网络字节序表示的16位整数
+    //这里port已被我修改为8008,如果为0的话内核会在bind时自动分配一个端口号
     name.sin_port = htons(*port);
-
-    //INADDR_ANY是一个 IPV4通配地址的常量，包含于<netinet/in.h>
-    //大多实现都将其定义成了0.0.0.0 参读《TLPI》P1187
     name.sin_addr.s_addr = htonl(INADDR_ANY);
 
-    //bind()用于绑定地址与 socket。参读《TLPI》P1153
-    //如果传进去的sockaddr结构中的 sin_port 指定为0，这时系统会选择一个临时的端口号
     if (bind(httpd, (struct sockaddr *)&name, sizeof(name)) < 0)
         error_die("bind");
 
-    //调用getsockname()获取系统分配的端口号
+    //这里是原来的代码逻辑,如果port是0的话通过bind后内核会随机分配一个端口号给当前的socket连接,
+    //获取这个端口号给port变量
     if (*port == 0)  /* if dynamically allocating a port */
     {
         int namelen = sizeof(name);
-        //getsockname()包含于<sys/socker.h>中，参读《TLPI》P1263
-        //调用getsockname()获取系统给 httpd 这个 socket 随机分配的端口号
         if (getsockname(httpd, (struct sockaddr *)&name, (socklen_t *)&namelen) == -1)
             error_die("getsockname");
         *port = ntohs(name.sin_port);
     }
 
 
-//最初的 BSD socket 实现中，backlog 的上限是5.参读《TLPI》P1156
+    //启动监听，backlog为5
     if (listen(httpd, 5) < 0)
         error_die("listen");
     return (httpd);
@@ -666,7 +648,7 @@ int main(void)
 
     while (1)
     {
-        //阻塞等待客户端的连接，参读《TLPI》P1157
+        //loop waiting for client connection
         connfd = accept(listenfd, (struct sockaddr *)&client, (socklen_t *)&client_len);
         if (connfd == -1) {
             error_die("accept");
