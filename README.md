@@ -3,9 +3,13 @@ TinyHttpd - 对原版加了一些修改和bug修复
 
 实现一个webServer要做的事：
 1、建立一条TCP通道(startup,accept_request)
+
 2、能够解析HTTP协议包，包括消息头解析和消息体解析(get_line)
+
 3、能够响应符合HTTP规范的包(bad_request,headers,not_found,unimplemented)
+
 4、处理静态请求(serve_file,cat)
+
 5、处理动态请求(execute_cgi,cannot_execute)
 
 修改
@@ -27,22 +31,9 @@ bind: Address already in use
 因为TCP协议在四次挥手中主动关闭方会进入TIME_WAIT状态，并且会等待2MSL的时间，而服务端的重启和崩溃都会进入这个状态。这里通过重用TCP连接解决。
 
 
-
 修复bug
 -------------------------
 1、原版中，在接收请求(accept_request)后，通过get_line解析请求行，发现不是GET或POST方法后，就调用unimplemented方法，通知客户端方法没有实现，但是在返回前没有读取tcp通道中的stream数据，这样客户端（可以用postman测试）就得不到响应，通过在调用unimplemented方法前添加readBufferBeforeSend方法，并在其后调用close关闭连接描述符，
-
-Usage
--------
-可以测试的URL
-GET:
-```
-yourip:8008/index.html
-yourip:8008/static/
-```
-POST:
-```
-
 
 
 License
